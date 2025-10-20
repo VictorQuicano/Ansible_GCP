@@ -1,0 +1,139 @@
+---
+- name: Create GCP instance and install Ansible
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  vars:
+    project_id: "tu-project-id" # Reemplaza con tu Project ID
+    instance_name: "ansible-managed-vm"
+    zone: "us-central1-a"
+    machine_type: "e2-small"
+
+  tasks:
+    - name: Create GCP instance
+      google.cloud.gcp_compute_instance:
+        name: "{{ instance_name }}"
+        machine_type: "{{ machine_type }}"
+        zone: "{{ zone }}"
+        disks:
+          - auto_delete: true
+            boot: true
+            initialize_params:
+              source_image: "projects/ubuntu-os-cloud/global/images/family/ubuntu-2204-lts"
+              disk_size_gb: 20
+        network_interfaces:
+          - network: "global/networks/default"
+            access_configs:
+              - name: "External NAT"
+                type: "ONE_TO_ONE_NAT"
+        tags:
+          items:
+            - "ansible-managed"
+            - "http-server"
+            - "https-server"
+        service_accounts:
+          - email: default
+            scopes:
+              - "https://www.googleapis.com/auth/cloud-platform"
+        metadata:
+          items:
+            - key: enable-oslogin
+              value: "TRUE"
+        project: "{{ project_id }}"
+        auth_kind: application
+        state: present
+      register: gcp_instance
+
+    - name: Wait for SSH to be available
+      wait_for:
+        host: "{{ gcp_instance.instance.networkInterfaces[0].accessConfigs[0].natIP }}"
+        port: 22
+        timeout: 60
+      delegate_to: localhost
+
+    - name: Add instance to in-memory inventory
+      add_host:
+        name: "{{ gcp_instance.instance.name }}"
+        ansible_host: "{{ gcp_instance.instance.networkInterfaces[0].accessConfigs[0].natIP }}"
+        ansible_user: "{{ (gcp_instance.instance.metadata.items | selectattr('key', 'equalto', 'enable-oslogin') | first).value | default('ubuntu') }}"
+        ansible_ssh_private_key_file: "~/.ssh/google_compute_engine"
+        groups: gcp_instances
+
+- name: Configure Ansible on the new instance
+  hosts: gcp_instances
+  become: yes
+  gather_facts: yes
+  tasks:
+    - name: Update package cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Install Python3 and pip
+      apt:
+        name:
+          - python3
+          - python3-pip
+          - python3-venv
+          - git
+          - curl
+        state: present
+
+    - name: Install Ansible via pip
+      pip:
+        name: ansible
+        state: latest
+        executable: pip3
+
+    - name: Install GCP collections for Ansible
+      community.general.ansible_galaxy:
+        name:
+          - google.cloud
+          - community.general
+        type: collection
+
+    - name: Create directory for Ansible projects
+      file:
+        path: /home/ubuntu/ansible-projects
+        state: directory
+        owner: ubuntu
+        group: ubuntu
+        mode: "0755"
+
+    - name: Install Google Cloud SDK (opcional)
+      shell: |
+        curl -sSL https://sdk.cloud.google.com | bash > /dev/null 2>&1
+        echo 'source /home/ubuntu/google-cloud-sdk/path.bash.inc' >> /home/ubuntu/.bashrc
+      args:
+        executable: /bin/bash
+      become_user: ubuntu
+
+    - name: Verify Ansible installation
+      command: ansible --version
+      register: ansible_version
+      changed_when: false
+
+    - name: Display Ansible version
+      debug:
+        msg: "{{ ansible_version.stdout }}"
+
+    - name: Create basic inventory file
+      copy:
+        dest: /home/ubuntu/ansible-projects/inventory.ini
+        content: |
+          [local]
+          localhost ansible_connection=local
+
+          [gcp_instances]
+          # Instancias GCP se agregarán aquí
+        owner: ubuntu
+        group: ubuntu
+        mode: "0644"
+
+    - name: Set proper permissions on home directory
+      file:
+        path: /home/ubuntu
+        owner: ubuntu
+        group: ubuntu
+        state: directory
+        recurse: yes
