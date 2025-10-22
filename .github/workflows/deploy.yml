@@ -47,27 +47,4 @@ jobs:
       - name: Copy files to GCP instance
         run: |
           echo "🚀 Copiando archivos a la instancia..."
-          gcloud compute scp /tmp/deploy/deploy.tar.gz ${{ secrets.GCP_INSTANCE }}:/tmp/ --zone=${{ secrets.GCP_ZONE }} --quiet
-
-      - name: Deploy on GCP instance
-        run: |
-          echo "🔧 Ejecutando despliegue remoto..."
-          gcloud compute ssh ${{ secrets.GCP_INSTANCE }} \
-            --zone=${{ secrets.GCP_ZONE }} \
-            --command='
-              set -e
-              DEPLOY_DIR="/home/victor/anisble-scripts"
-              BACKUP_DIR="/home/victor/anisble-scripts/backups"
-              TMP_TAR="/tmp/deploy.tar.gz"
-
-              echo "📂 Creando directorios si no existen..."
-              mkdir -p "$DEPLOY_DIR" "$BACKUP_DIR"
-
-              echo "📦 Extrayendo nuevos archivos..."
-              sudo tar -xzf "$TMP_TAR" -C "$DEPLOY_DIR"
-
-              echo "🧹 Limpiando archivos temporales..."
-              rm -f "$TMP_TAR"
-
-              echo "✅ Despliegue completado exitosamente"
-            '
+          gcloud compute scp /tmp/deploy/deploy.tar.gz ${{ secrets.GCP_INSTANCE }}:/tmp/ --zone=${{ secrets.GCP_ZONE }} --quiet            '
