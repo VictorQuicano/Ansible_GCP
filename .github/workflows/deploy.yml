@@ -24,7 +24,8 @@ jobs:
       - name: Create deploy archive
         run: |
           echo "📦 Creando paquete de despliegue..."
-          tar -czf deploy.tar.gz \
+          mkdir -p /tmp/deploy
+          tar -czf /tmp/deploy/deploy.tar.gz \
             --exclude='.github' \
             --exclude='.git' \
             --exclude='*.log' \
@@ -32,8 +33,8 @@ jobs:
             --exclude='*.temp' \
             --exclude='node_modules' \
             --exclude='.DS_Store' \
-            --exclude='deploy.tar.gz' \
             .
+          mv /tmp/deploy/deploy.tar.gz .
 
       - name: Copy files to GCP instance
         run: |
