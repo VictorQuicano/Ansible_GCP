@@ -48,7 +48,7 @@ jobs:
       - name: Copy files to GCP instance
         run: |
           echo "🚀 Copiando archivos a la instancia..."
-          gcloud compute scp deploy.tar.gz ${{ secrets.GCP_INSTANCE }}:/tmp/ \ 
+          gcloud compute scp /tmp/deploy/deploy.tar.gz ${{ secrets.GCP_INSTANCE }}:/tmp/ \ 
           --zone=${{ secrets.GCP_ZONE }} --quiet
 
       - name: Deploy on GCP instance
@@ -58,7 +58,7 @@ jobs:
             --zone=${{ secrets.GCP_ZONE }} \
             --command='
               set -e
-              DEPLOY_DIR="$HOME/anisble-scripts/html"
+              DEPLOY_DIR="$HOME/anisble-scripts"
               BACKUP_DIR="$HOME/anisble-scripts/backups"
               TMP_TAR="/tmp/deploy.tar.gz"
 
@@ -71,12 +71,5 @@ jobs:
               echo "🧹 Limpiando archivos temporales..."
               rm -f "$TMP_TAR"
 
-              echo "🔐 Ajustando permisos..."
-              sudo chown -R www-data:www-data "$DEPLOY_DIR"
-              sudo chmod -R 755 "$DEPLOY_DIR"
-
               echo "✅ Despliegue completado exitosamente"
             '
-
-      - name: Clean up local files
-        run: rm -f deploy.tar.gz
