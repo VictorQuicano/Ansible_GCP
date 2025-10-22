@@ -1,0 +1,1 @@
+gcloud compute ssh --zone "southamerica-west1-a" "ansiable-instance" --project "secret-epsilon-474011-m4"

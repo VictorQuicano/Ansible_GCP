@@ -1,0 +1,48 @@
+name: Deploy to GCP Instance
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v1
+        with:
+          project_id: ${{ secrets.GCP_PROJECT }}
+          service_account_key: ${{ secrets.GCP_SA_KEY }}
+          export_default_credentials: true
+
+      - name: Deploy files to GCP instance
+        run: |
+          # Crear archivo tar con el contenido
+          tar -czf deploy.tar.gz --exclude='.github' --exclude='.git' .
+
+          # Copiar archivos a la instancia
+          gcloud compute scp --zone=${{ secrets.GCP_ZONE }} deploy.tar.gz ${{ secrets.GCP_INSTANCE }}:/tmp/
+
+          # Ejecutar script de deploy en la instancia
+          gcloud compute ssh --zone=${{ secrets.GCP_ZONE }} ${{ secrets.GCP_INSTANCE }} --command="
+            # Crear backup del directorio actual
+            # sudo tar -czf ~/anisble-scripts/html_backup_$(date +%Y%m%d_%H%M%S).tar.gz -C ~/anisble-scripts/html . 2>/dev/null || true
+            
+            # Extraer nuevos archivos
+            sudo tar -xzf /tmp/deploy.tar.gz -C ~/anisble-scripts/html/
+            
+            # Limpiar archivo temporal
+            rm /tmp/deploy.tar.gz
+            
+            # Ajustar permisos si es necesario
+            sudo chown -R www-data:www-data ~/anisble-scripts/html/ || true
+            sudo chmod -R 755 ~/anisble-scripts/html/ || true
+            
+            echo 'Deploy completado exitosamente'
+          "
