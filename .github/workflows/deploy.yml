@@ -60,7 +60,7 @@ jobs:
               TMP_TAR="/tmp/deploy.tar.gz"
 
               echo "📂 Creando directorios si no existen..."
-              sudo mkdir -p "$DEPLOY_DIR" "$BACKUP_DIR"
+              sudo mkdir -p "$DEPLOY_DIR"
 
               echo "📦 Extrayendo nuevos archivos..."
               sudo tar -xzf "$TMP_TAR" -C "$DEPLOY_DIR"
