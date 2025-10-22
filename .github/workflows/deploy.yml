@@ -47,4 +47,4 @@ jobs:
       - name: Copy files to GCP instance
         run: |
           echo "🚀 Copiando archivos a la instancia..."
-          gcloud compute scp /tmp/deploy/deploy.tar.gz ${{ secrets.GCP_INSTANCE }}:/tmp/ --zone=${{ secrets.GCP_ZONE }} --quiet            '
+          gcloud compute scp /tmp/deploy/deploy.tar.gz ${{ secrets.GCP_INSTANCE }}:/tmp/ --zone=${{ secrets.GCP_ZONE }} --quiet
