@@ -1,0 +1,18 @@
+# site.yml
+---
+- name: Deploy complete GKE cluster with autoscaling
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - group_vars/all.yml
+
+  tasks:
+    - name: Include infrastructure playbook
+      include_tasks: playbooks/01-create-infrastructure.yml
+
+    - name: Include GKE cluster playbook
+      include_tasks: playbooks/02-create-gke-cluster.yml
+
+    - name: Include configuration playbook
+      include_tasks: playbooks/03-configure-autoscaling.yml

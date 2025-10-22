@@ -1,0 +1,129 @@
+# playbooks/01-create-infrastructure.yml
+---
+- name: Create GCP infrastructure for GKE cluster
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  tasks:
+    - name: Ensure GCP credentials exist
+      assert:
+        that:
+          - gcp_credential_file is defined
+          - gcp_credential_file | length > 0
+        fail_msg: "GCP credentials file path is not defined"
+
+    - name: Check if GCP credentials file exists
+      stat:
+        path: "{{ gcp_credential_file }}"
+      register: gcp_cred_file
+
+    - name: Fail if GCP credentials file doesn't exist
+      fail:
+        msg: "GCP credentials file not found at {{ gcp_credential_file }}"
+      when: not gcp_cred_file.stat.exists
+
+    - name: Create VPC network for GKE
+      google.cloud.gcp_compute_network:
+        name: "{{ network_name }}"
+        auto_create_subnetworks: false
+        project: "{{ gcp_project }}"
+        auth_kind: serviceaccount
+        service_account_file: "{{ gcp_credential_file }}"
+        state: present
+      register: network
+
+    - name: Create subnet for GKE
+      google.cloud.gcp_compute_subnetwork:
+        name: "{{ subnet_name }}"
+        network: "{{ network_name }}"
+        region: "{{ gcp_region }}"
+        ip_cidr_range: "{{ subnet_cidr }}"
+        private_ip_google_access: true
+        project: "{{ gcp_project }}"
+        auth_kind: serviceaccount
+        service_account_file: "{{ gcp_credential_file }}"
+        state: present
+      register: subnet
+
+    - name: Create firewall rule for internal communication
+      google.cloud.gcp_compute_firewall:
+        name: "{{ cluster_name }}-internal"
+        network: "{{ network_name }}"
+        direction: INGRESS
+        priority: 1000
+        allowed:
+          - protocol: tcp
+            ports: ["0-65535"]
+          - protocol: udp
+            ports: ["0-65535"]
+          - protocol: icmp
+        source_ranges:
+          - "{{ subnet_cidr }}"
+          - "{{ pod_cidr }}"
+          - "{{ service_cidr }}"
+        project: "{{ gcp_project }}"
+        auth_kind: serviceaccount
+        service_account_file: "{{ gcp_credential_file }}"
+        state: present
+
+    - name: Create firewall rule for SSH access
+      google.cloud.gcp_compute_firewall:
+        name: "{{ cluster_name }}-ssh"
+        network: "{{ network_name }}"
+        direction: INGRESS
+        priority: 1000
+        allowed:
+          - protocol: tcp
+            ports: ["22"]
+        source_ranges:
+          - "0.0.0.0/0"
+        target_tags:
+          - "gke-node"
+        project: "{{ gcp_project }}"
+        auth_kind: serviceaccount
+        service_account_file: "{{ gcp_credential_file }}"
+        state: present
+
+    - name: Create firewall rule for HTTP/HTTPS
+      google.cloud.gcp_compute_firewall:
+        name: "{{ cluster_name }}-web"
+        network: "{{ network_name }}"
+        direction: INGRESS
+        priority: 1000
+        allowed:
+          - protocol: tcp
+            ports: ["80", "443", "30000-32767"]
+        source_ranges:
+          - "0.0.0.0/0"
+        project: "{{ gcp_project }}"
+        auth_kind: serviceaccount
+        service_account_file: "{{ gcp_credential_file }}"
+        state: present
+
+    - name: Create Cloud Router for NAT
+      google.cloud.gcp_compute_router:
+        name: "{{ cluster_name }}-router"
+        network: "{{ network_name }}"
+        region: "{{ gcp_region }}"
+        project: "{{ gcp_project }}"
+        auth_kind: serviceaccount
+        service_account_file: "{{ gcp_credential_file }}"
+        state: present
+
+    - name: Create Cloud NAT
+      google.cloud.gcp_compute_router_nat:
+        name: "{{ cluster_name }}-nat"
+        router: "{{ cluster_name }}-router"
+        region: "{{ gcp_region }}"
+        nat_ip_allocate_option: "AUTO_ONLY"
+        source_subnetwork_ip_ranges_to_nat: "ALL_SUBNETWORKS_ALL_IP_RANGES"
+        project: "{{ gcp_project }}"
+        auth_kind: serviceaccount
+        service_account_file: "{{ gcp_credential_file }}"
+        state: present
+
+    - name: Save network information
+      set_fact:
+        created_network: "{{ network_name }}"
+        created_subnet: "{{ subnet_name }}"

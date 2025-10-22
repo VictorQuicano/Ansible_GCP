@@ -1,0 +1,48 @@
+# group_vars/all.yml
+---
+# Configuración de GCP
+gcp_project: "secret-epsilon-474011-m4"
+gcp_credential_file: "{{ playbook_dir }}/credentials/gcp-service-account.json"
+gcp_region: "southamerica-west1"
+gcp_zone: "southamerica-west1-a"
+
+# Configuración del Cluster GKE
+cluster_name: "stress-cluster"
+k8s_version: "1.28"
+release_channel: "REGULAR"
+
+# Configuración de Node Pools
+node_pools:
+  - name: "default-pool"
+    machine_type: "e2-medium"
+    disk_size: 100
+    disk_type: "pd-standard"
+    min_nodes: 1
+    max_nodes: 10
+    initial_nodes: 2
+    preemptible: false
+    auto_repair: true
+    auto_upgrade: true
+
+  - name: "spot-pool"
+    machine_type: "e2-small"
+    disk_size: 50
+    disk_type: "pd-standard"
+    min_nodes: 0
+    max_nodes: 5
+    initial_nodes: 0
+    preemptible: true
+    auto_repair: true
+    auto_upgrade: true
+
+# Configuración de Networking
+network_name: "gke-network"
+subnet_name: "gke-subnet"
+subnet_cidr: "10.0.0.0/16"
+pod_cidr: "10.1.0.0/16"
+service_cidr: "10.2.0.0/16"
+
+# Configuración de Autoscaling
+enable_cluster_autoscaling: true
+enable_vertical_pod_autoscaling: true
+enable_horizontal_pod_autoscaling: true

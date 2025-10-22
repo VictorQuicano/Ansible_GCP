@@ -1,0 +1,10 @@
+# inventory.yml
+---
+all:
+  hosts:
+    localhost:
+      ansible_connection: local
+  children:
+    gcp:
+      hosts:
+        localhost:
