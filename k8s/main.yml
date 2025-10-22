@@ -1,0 +1,293 @@
+---
+# main.yml - Playbook principal para crear cluster K8s en GCP
+- name: Crear infraestructura en GCP
+  hosts: localhost
+  gather_facts: no
+  vars:
+    gcp_project: "tu-proyecto-gcp"
+    gcp_region: "southamerica-west1"
+    gcp_zone: "southamerica-west1-a"
+    gcp_cred_file: "~/gcp-credentials.json"
+    cluster_name: "k8s-cluster"
+    machine_type: "e2-medium"
+    image_family: "ubuntu-2004-lts"
+    image_project: "ubuntu-os-cloud"
+
+  tasks:
+    - name: Crear instancia master
+      gcp_compute_instance:
+        name: "{{ cluster_name }}-master"
+        machine_type: "{{ machine_type }}"
+        zone: "{{ gcp_zone }}"
+        project: "{{ gcp_project }}"
+        auth_kind: serviceaccount
+        service_account_file: "{{ gcp_cred_file }}"
+        disks:
+          - auto_delete: true
+            boot: true
+            initialize_params:
+              disk_size_gb: 50
+              source_image: "projects/{{ image_project }}/global/images/family/{{ image_family }}"
+        network_interfaces:
+          - network: null
+            access_configs:
+              - name: External NAT
+                type: ONE_TO_ONE_NAT
+        tags:
+          items:
+            - k8s-master
+            - k8s-cluster
+        metadata:
+          ssh-keys: "{{ lookup('file', '~/.ssh/id_rsa.pub') }}"
+        state: present
+      register: master_instance
+
+    - name: Crear instancias workers
+      gcp_compute_instance:
+        name: "{{ cluster_name }}-worker-{{ item }}"
+        machine_type: "{{ machine_type }}"
+        zone: "{{ gcp_zone }}"
+        project: "{{ gcp_project }}"
+        auth_kind: serviceaccount
+        service_account_file: "{{ gcp_cred_file }}"
+        disks:
+          - auto_delete: true
+            boot: true
+            initialize_params:
+              disk_size_gb: 50
+              source_image: "projects/{{ image_project }}/global/images/family/{{ image_family }}"
+        network_interfaces:
+          - network: null
+            access_configs:
+              - name: External NAT
+                type: ONE_TO_ONE_NAT
+        tags:
+          items:
+            - k8s-worker
+            - k8s-cluster
+        metadata:
+          ssh-keys: "{{ lookup('file', '~/.ssh/id_rsa.pub') }}"
+        state: present
+      loop:
+        - 1
+        - 2
+      register: worker_instances
+
+    - name: Crear regla de firewall para K8s
+      gcp_compute_firewall:
+        name: "{{ cluster_name }}-allow-k8s"
+        project: "{{ gcp_project }}"
+        auth_kind: serviceaccount
+        service_account_file: "{{ gcp_cred_file }}"
+        allowed:
+          - ip_protocol: tcp
+            ports:
+              - "6443"
+              - "2379-2380"
+              - "10250-10252"
+              - "30000-32767"
+        target_tags:
+          - k8s-cluster
+        source_ranges:
+          - "0.0.0.0/0"
+        state: present
+
+    - name: Agregar master al inventario dinámico
+      add_host:
+        name: "{{ master_instance.networkInterfaces[0].accessConfigs[0].natIP }}"
+        groups: k8s_master
+        ansible_user: "{{ ansible_user | default('ubuntu') }}"
+        ansible_ssh_private_key_file: "~/.ssh/id_rsa"
+
+    - name: Agregar workers al inventario dinámico
+      add_host:
+        name: "{{ item.networkInterfaces[0].accessConfigs[0].natIP }}"
+        groups: k8s_workers
+        ansible_user: "{{ ansible_user | default('ubuntu') }}"
+        ansible_ssh_private_key_file: "~/.ssh/id_rsa"
+      loop: "{{ worker_instances.results }}"
+
+    - name: Esperar que las instancias estén listas
+      wait_for:
+        host: "{{ item }}"
+        port: 22
+        delay: 10
+        timeout: 300
+      loop:
+        - "{{ master_instance.networkInterfaces[0].accessConfigs[0].natIP }}"
+        - "{{ worker_instances.results[0].networkInterfaces[0].accessConfigs[0].natIP }}"
+        - "{{ worker_instances.results[1].networkInterfaces[0].accessConfigs[0].natIP }}"
+
+- name: Configurar todos los nodos
+  hosts: k8s_master:k8s_workers
+  become: yes
+  tasks:
+    - name: Actualizar cache de apt
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Instalar dependencias
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+          - software-properties-common
+        state: present
+
+    - name: Deshabilitar swap
+      shell: |
+        swapoff -a
+        sed -i '/swap/d' /etc/fstab
+
+    - name: Cargar módulos del kernel
+      copy:
+        dest: /etc/modules-load.d/k8s.conf
+        content: |
+          overlay
+          br_netfilter
+
+    - name: Aplicar módulos
+      shell: |
+        modprobe overlay
+        modprobe br_netfilter
+
+    - name: Configurar sysctl para K8s
+      copy:
+        dest: /etc/sysctl.d/k8s.conf
+        content: |
+          net.bridge.bridge-nf-call-iptables = 1
+          net.bridge.bridge-nf-call-ip6tables = 1
+          net.ipv4.ip_forward = 1
+
+    - name: Aplicar configuración sysctl
+      shell: sysctl --system
+
+    - name: Instalar containerd
+      apt:
+        name: containerd
+        state: present
+
+    - name: Crear directorio de configuración de containerd
+      file:
+        path: /etc/containerd
+        state: directory
+
+    - name: Generar configuración por defecto de containerd
+      shell: containerd config default > /etc/containerd/config.toml
+
+    - name: Configurar systemd cgroup driver en containerd
+      lineinfile:
+        path: /etc/containerd/config.toml
+        regexp: "SystemdCgroup = false"
+        line: "            SystemdCgroup = true"
+
+    - name: Reiniciar containerd
+      systemd:
+        name: containerd
+        state: restarted
+        enabled: yes
+
+    - name: Agregar clave GPG de Kubernetes
+      apt_key:
+        url: https://pkgs.k8s.io/core:/stable:/v1.28/deb/Release.key
+        state: present
+        keyring: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+
+    - name: Agregar repositorio de Kubernetes
+      apt_repository:
+        repo: "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.28/deb/ /"
+        state: present
+        filename: kubernetes
+
+    - name: Instalar kubelet, kubeadm y kubectl
+      apt:
+        name:
+          - kubelet
+          - kubeadm
+          - kubectl
+        state: present
+        update_cache: yes
+
+    - name: Mantener versión de kubelet, kubeadm y kubectl
+      dpkg_selections:
+        name: "{{ item }}"
+        selection: hold
+      loop:
+        - kubelet
+        - kubeadm
+        - kubectl
+
+- name: Inicializar cluster en master
+  hosts: k8s_master
+  become: yes
+  tasks:
+    - name: Inicializar cluster con kubeadm
+      shell: |
+        kubeadm init --pod-network-cidr=10.244.0.0/16 --apiserver-advertise-address={{ ansible_default_ipv4.address }}
+      args:
+        creates: /etc/kubernetes/admin.conf
+      register: kubeadm_init
+
+    - name: Crear directorio .kube para usuario ubuntu
+      file:
+        path: /home/ubuntu/.kube
+        state: directory
+        owner: ubuntu
+        group: ubuntu
+
+    - name: Copiar config de admin
+      copy:
+        src: /etc/kubernetes/admin.conf
+        dest: /home/ubuntu/.kube/config
+        remote_src: yes
+        owner: ubuntu
+        group: ubuntu
+
+    - name: Instalar Flannel CNI
+      become_user: ubuntu
+      shell: kubectl apply -f https://raw.githubusercontent.com/flannel-io/flannel/master/Documentation/kube-flannel.yml
+
+    - name: Obtener comando de join
+      shell: kubeadm token create --print-join-command
+      register: join_command
+
+    - name: Guardar comando de join
+      set_fact:
+        k8s_join_command: "{{ join_command.stdout }}"
+
+    - name: Compartir join command con workers
+      add_host:
+        name: "k8s_join_holder"
+        join_cmd: "{{ k8s_join_command }}"
+
+- name: Unir workers al cluster
+  hosts: k8s_workers
+  become: yes
+  tasks:
+    - name: Ejecutar comando join
+      shell: "{{ hostvars['k8s_join_holder']['join_cmd'] }}"
+      args:
+        creates: /etc/kubernetes/kubelet.conf
+
+- name: Verificar cluster
+  hosts: k8s_master
+  become_user: ubuntu
+  tasks:
+    - name: Esperar que todos los nodos estén Ready
+      shell: kubectl get nodes
+      register: nodes_status
+      until: nodes_status.stdout.find("NotReady") == -1
+      retries: 30
+      delay: 10
+
+    - name: Mostrar estado del cluster
+      shell: kubectl get nodes -o wide
+      register: cluster_status
+
+    - name: Mostrar resultado
+      debug:
+        var: cluster_status.stdout_lines
