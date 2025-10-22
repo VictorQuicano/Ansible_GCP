@@ -24,7 +24,17 @@ jobs:
       - name: Deploy files to GCP instance
         run: |
           # Crear archivo tar con el contenido
-          tar -czf deploy.tar.gz --exclude='.github' --exclude='.git' .
+          # Crear archivo tar excluyendo más archivos problemáticos
+          tar -czf deploy.tar.gz \
+            --exclude='.github' \
+            --exclude='.git' \
+            --exclude='*.log' \
+            --exclude='*.tmp' \
+            --exclude='*.temp' \
+            --exclude='node_modules' \
+            --exclude='.DS_Store' \
+            --exclude='deploy.tar.gz' \
+            .
 
           # Copiar archivos a la instancia
           gcloud compute scp --zone=${{ secrets.GCP_ZONE }} deploy.tar.gz ${{ secrets.GCP_INSTANCE }}:/tmp/
