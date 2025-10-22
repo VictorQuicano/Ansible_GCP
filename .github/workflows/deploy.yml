@@ -21,6 +21,12 @@ jobs:
           service_account_key: ${{ secrets.GCP_SA_KEY }}
           export_default_credentials: true
 
+      - name: Verify authentication
+        run: |
+          echo "🔑 Verificando autenticación..."
+          gcloud auth list
+          gcloud config list
+
       - name: Create deploy archive
         run: |
           echo "📦 Creando paquete de despliegue..."
