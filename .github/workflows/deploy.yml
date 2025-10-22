@@ -21,10 +21,9 @@ jobs:
           service_account_key: ${{ secrets.GCP_SA_KEY }}
           export_default_credentials: true
 
-      - name: Deploy files to GCP instance
+      - name: Create deploy archive
         run: |
-          # Crear archivo tar con el contenido
-          # Crear archivo tar excluyendo más archivos problemáticos
+          echo "📦 Creando paquete de despliegue..."
           tar -czf deploy.tar.gz \
             --exclude='.github' \
             --exclude='.git' \
@@ -36,23 +35,38 @@ jobs:
             --exclude='deploy.tar.gz' \
             .
 
-          # Copiar archivos a la instancia
-          gcloud compute scp --zone=${{ secrets.GCP_ZONE }} deploy.tar.gz ${{ secrets.GCP_INSTANCE }}:/tmp/
+      - name: Copy files to GCP instance
+        run: |
+          echo "🚀 Copiando archivos a la instancia..."
+          gcloud compute scp deploy.tar.gz ${{ secrets.GCP_USER }}@${{ secrets.GCP_INSTANCE }}:/tmp/ \
+            --zone=${{ secrets.GCP_ZONE }} --quiet
 
-          # Ejecutar script de deploy en la instancia
-          gcloud compute ssh --zone=${{ secrets.GCP_ZONE }} ${{ secrets.GCP_INSTANCE }} --command="
-            # Crear backup del directorio actual
-            # sudo tar -czf ~/anisble-scripts/html_backup_$(date +%Y%m%d_%H%M%S).tar.gz -C ~/anisble-scripts/html . 2>/dev/null || true
-            
-            # Extraer nuevos archivos
-            sudo tar -xzf /tmp/deploy.tar.gz -C ~/anisble-scripts/html/
-            
-            # Limpiar archivo temporal
-            rm /tmp/deploy.tar.gz
-            
-            # Ajustar permisos si es necesario
-            sudo chown -R www-data:www-data ~/anisble-scripts/html/ || true
-            sudo chmod -R 755 ~/anisble-scripts/html/ || true
-            
-            echo 'Deploy completado exitosamente'
-          "
+      - name: Deploy on GCP instance
+        run: |
+          echo "🔧 Ejecutando despliegue remoto..."
+          gcloud compute ssh ${{ secrets.GCP_USER }}@${{ secrets.GCP_INSTANCE }} \
+            --zone=${{ secrets.GCP_ZONE }} \
+            --command='
+              set -e
+              DEPLOY_DIR="$HOME/anisble-scripts/html"
+              BACKUP_DIR="$HOME/anisble-scripts/backups"
+              TMP_TAR="/tmp/deploy.tar.gz"
+
+              echo "📂 Creando directorios si no existen..."
+              mkdir -p "$DEPLOY_DIR" "$BACKUP_DIR"
+
+              echo "📦 Extrayendo nuevos archivos..."
+              sudo tar -xzf "$TMP_TAR" -C "$DEPLOY_DIR"
+
+              echo "🧹 Limpiando archivos temporales..."
+              rm -f "$TMP_TAR"
+
+              echo "🔐 Ajustando permisos..."
+              sudo chown -R www-data:www-data "$DEPLOY_DIR"
+              sudo chmod -R 755 "$DEPLOY_DIR"
+
+              echo "✅ Despliegue completado exitosamente"
+            '
+
+      - name: Clean up local files
+        run: rm -f deploy.tar.gz
