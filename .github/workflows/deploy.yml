@@ -43,7 +43,6 @@ jobs:
             --exclude='node_modules' \
             --exclude='.DS_Store' \
             .
-          mv /tmp/deploy/deploy.tar.gz .
 
       - name: Copy files to GCP instance
         run: |
