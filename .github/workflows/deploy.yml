@@ -56,8 +56,8 @@ jobs:
             --zone=${{ secrets.GCP_ZONE }} \
             --command='
               set -e
-              DEPLOY_DIR="$HOME/anisble-scripts"
-              BACKUP_DIR="$HOME/anisble-scripts/backups"
+              DEPLOY_DIR="/home/victor/anisble-scripts"
+              BACKUP_DIR="/home/victor/anisble-scripts/backups"
               TMP_TAR="/tmp/deploy.tar.gz"
 
               echo "📂 Creando directorios si no existen..."
