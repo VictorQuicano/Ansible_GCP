@@ -1,0 +1,21 @@
+# Variables para GCP
+gcp_project: "secret-epsilon-474011-m4"
+gcp_cred_file: "./gcp_credential.json"
+gcp_zone: "northamerica-south1-a"
+gcp_region: "northamerica-south1"
+gcp_network: "k8s-network"
+gcp_subnet: "k8s-subnet"
+
+# Variables de las VMs
+machine_type: "e2-medium"
+image_family: "ubuntu-2204-lts"
+image_project: "ubuntu-os-cloud"
+disk_size: 50
+
+# Variables de Kubernetes
+k8s_version: "1.28"
+pod_network_cidr: "10.244.0.0/16"
+service_cidr: "10.96.0.0/12"
+
+# CNI (Flannel)
+cni_url: "https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml"

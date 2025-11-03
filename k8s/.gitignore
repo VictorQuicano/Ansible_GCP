@@ -1,0 +1,4 @@
+gcp_credential.json
+kubeconfig
+ssh-key
+ssh-key.pub

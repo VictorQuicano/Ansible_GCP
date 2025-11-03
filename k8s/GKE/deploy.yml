@@ -1,0 +1,119 @@
+---
+- name: Desplegar GKE Cluster con Autoescalado
+  hosts: localhost
+  connection: local
+  gather_facts: no
+
+  vars:
+    # Configuración del proyecto GCP
+    gcp_project: "secret-epsilon-474011-m4"
+    gcp_cred_file: "../gcp_credential.json"
+    gcp_region: "southamerica-east1"
+    gcp_zone: "southamerica-east1-a"
+
+    # Configuración del cluster
+    cluster_name: "gke-con-fe-lastx2"
+    cluster_version: "latest"
+
+    # Configuración del node pool
+    node_pool_name: "default-pool"
+    machine_type: "e2-medium"
+    disk_size_gb: 15
+
+    # Configuración de autoescalado
+    autoscaling_enabled: true
+    min_node_count: 2
+    max_node_count: 4
+    initial_node_count: 2
+
+    # Red
+    network_name: "default"
+    subnetwork_name: "default"
+
+  tasks:
+    - name: Verificar que gcloud SDK esté instalado
+      command: gcloud --version
+      register: gcloud_check
+      failed_when: false
+      changed_when: false
+
+    - name: Instalar colección de Google Cloud
+      debug:
+        msg: "Asegúrate de tener instalado: ansible-galaxy collection install google.cloud"
+
+    - name: Crear GKE Cluster
+      google.cloud.gcp_container_cluster:
+        name: "{{ cluster_name }}"
+        initial_node_count: "{{ initial_node_count }}"
+        location: "{{ gcp_zone }}"
+        project: "{{ gcp_project }}"
+        auth_kind: serviceaccount
+        service_account_file: "{{ gcp_cred_file }}"
+        network: "{{ network_name }}"
+        subnetwork: "{{ subnetwork_name }}"
+        initial_cluster_version: "{{ cluster_version }}"
+        addons_config:
+          http_load_balancing:
+            disabled: false
+          horizontal_pod_autoscaling:
+            disabled: false
+        enable_kubernetes_alpha: false
+        legacy_abac:
+          enabled: false
+        ip_allocation_policy:
+          use_ip_aliases: true
+        state: present
+      register: cluster
+    - name: Crear Node Pool con Autoescalado
+      google.cloud.gcp_container_node_pool:
+        name: "{{ node_pool_name }}"
+        cluster: "{{ cluster }}"
+        location: "{{ gcp_zone }}"
+        project: "{{ gcp_project }}"
+        auth_kind: serviceaccount
+        service_account_file: "{{ gcp_cred_file }}"
+        initial_node_count: "{{ initial_node_count }}"
+        autoscaling:
+          enabled: "{{ autoscaling_enabled }}"
+          min_node_count: "{{ min_node_count }}"
+          max_node_count: "{{ max_node_count }}"
+        config:
+          machine_type: "{{ machine_type }}"
+          disk_size_gb: "{{ disk_size_gb }}"
+          disk_type: "pd-standard"
+          preemptible: false
+          oauth_scopes:
+            - https://www.googleapis.com/auth/compute
+            - https://www.googleapis.com/auth/devstorage.read_only
+            - https://www.googleapis.com/auth/logging.write
+            - https://www.googleapis.com/auth/monitoring
+        management:
+          auto_repair: true
+          auto_upgrade: true
+        state: present
+      register: node_pool
+    - name: Obtener credenciales del cluster
+      command: >
+        gcloud container clusters get-credentials {{ cluster_name }}
+        --zone={{ gcp_zone }}
+        --project={{ gcp_project }}
+      environment:
+        GOOGLE_APPLICATION_CREDENTIALS: "{{ gcp_cred_file }}"
+      changed_when: true
+    - name: Mostrar información del cluster
+      debug:
+        msg:
+          - "Cluster creado exitosamente: {{ cluster_name }}"
+          - "Zona: {{ gcp_zone }}"
+          - "Nodes iniciales: {{ initial_node_count }}"
+          - "Autoescalado: {{ min_node_count }} - {{ max_node_count }} nodos"
+          - "Tipo de máquina: {{ machine_type }}"
+    - name: Verificar estado del cluster
+      command: kubectl cluster-info
+      register: cluster_info
+      changed_when: false
+      failed_when: false
+    - name: Mostrar información de kubectl
+      debug:
+        var: cluster_info.stdout_lines
+      when: cluster_info.rc == 0

@@ -1,0 +1,78 @@
+---
+- name: Destruir infraestructura de Kubernetes en GCP
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  vars_files:
+    - group_vars/all.yml
+
+  tasks:
+    - name: Eliminar instancia master
+      google.cloud.gcp_compute_instance:
+        name: k8s-master
+        zone: "{{ gcp_zone }}"
+        project: "{{ gcp_project }}"
+        auth_kind: serviceaccount
+        service_account_file: "{{ gcp_cred_file }}"
+        state: absent
+      ignore_errors: yes
+
+    - name: Eliminar instancia worker 1
+      google.cloud.gcp_compute_instance:
+        name: k8s-worker-1
+        zone: "{{ gcp_zone }}"
+        project: "{{ gcp_project }}"
+        auth_kind: serviceaccount
+        service_account_file: "{{ gcp_cred_file }}"
+        state: absent
+      ignore_errors: yes
+
+    - name: Eliminar instancia worker 2
+      google.cloud.gcp_compute_instance:
+        name: k8s-worker-2
+        zone: "{{ gcp_zone }}"
+        project: "{{ gcp_project }}"
+        auth_kind: serviceaccount
+        service_account_file: "{{ gcp_cred_file }}"
+        state: absent
+      ignore_errors: yes
+
+    - name: Esperar eliminación de instancias
+      pause:
+        seconds: 30
+
+    - name: Eliminar reglas de firewall
+      google.cloud.gcp_compute_firewall:
+        name: "{{ item }}"
+        project: "{{ gcp_project }}"
+        auth_kind: serviceaccount
+        service_account_file: "{{ gcp_cred_file }}"
+        state: absent
+      loop:
+        - "{{ gcp_network }}-allow-ssh"
+        - "{{ gcp_network }}-allow-k8s"
+        - "{{ gcp_network }}-allow-internal"
+      ignore_errors: yes
+
+    - name: Eliminar subred
+      google.cloud.gcp_compute_subnetwork:
+        name: "{{ gcp_subnet }}"
+        region: "{{ gcp_region }}"
+        project: "{{ gcp_project }}"
+        auth_kind: serviceaccount
+        service_account_file: "{{ gcp_cred_file }}"
+        state: absent
+      ignore_errors: yes
+
+    - name: Eliminar red VPC
+      google.cloud.gcp_compute_network:
+        name: "{{ gcp_network }}"
+        project: "{{ gcp_project }}"
+        auth_kind: serviceaccount
+        service_account_file: "{{ gcp_cred_file }}"
+        state: absent
+      ignore_errors: yes
+
+    - name: Mensaje final
+      debug:
+        msg: "Infraestructura eliminada completamente"

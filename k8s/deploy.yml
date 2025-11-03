@@ -1,0 +1,454 @@
+---
+- name: Crear infraestructura en GCP
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  vars_files:
+    - group_vars/all.yml
+
+  tasks:
+    - name: Crear red VPC
+      google.cloud.gcp_compute_network:
+        name: "{{ gcp_network }}"
+        auto_create_subnetworks: no
+        project: "{{ gcp_project }}"
+        auth_kind: serviceaccount
+        service_account_file: "{{ gcp_cred_file }}"
+        state: present
+      register: network
+
+    - name: Crear subred
+      google.cloud.gcp_compute_subnetwork:
+        name: "{{ gcp_subnet }}"
+        region: "{{ gcp_region }}"
+        network: "{{ network }}"
+        ip_cidr_range: "10.1.0.0/24"
+        project: "{{ gcp_project }}"
+        auth_kind: serviceaccount
+        service_account_file: "{{ gcp_cred_file }}"
+        state: present
+
+    - name: Crear regla de firewall para SSH
+      google.cloud.gcp_compute_firewall:
+        name: "{{ gcp_network }}-allow-ssh"
+        network: "{{ network }}"
+        allowed:
+          - ip_protocol: tcp
+            ports:
+              - "22"
+        source_ranges:
+          - 0.0.0.0/0
+        project: "{{ gcp_project }}"
+        auth_kind: serviceaccount
+        service_account_file: "{{ gcp_cred_file }}"
+        state: present
+
+    - name: Crear regla de firewall para Kubernetes
+      google.cloud.gcp_compute_firewall:
+        name: "{{ gcp_network }}-allow-k8s"
+        network: "{{ network }}"
+        allowed:
+          - ip_protocol: tcp
+            ports:
+              - "6443"
+              - "2379-2380"
+              - "10250-10252"
+              - "30000-32767"
+          - ip_protocol: udp
+            ports:
+              - "8285"
+              - "8472"
+        source_ranges:
+          - 10.1.0.0/24
+        project: "{{ gcp_project }}"
+        auth_kind: serviceaccount
+        service_account_file: "{{ gcp_cred_file }}"
+        state: present
+
+    - name: Crear regla de firewall interna
+      google.cloud.gcp_compute_firewall:
+        name: "{{ gcp_network }}-allow-internal"
+        network: "{{ network }}"
+        allowed:
+          - ip_protocol: tcp
+            ports:
+              - "0-65535"
+          - ip_protocol: udp
+            ports:
+              - "0-65535"
+          - ip_protocol: icmp
+        source_ranges:
+          - 10.1.0.0/24
+          - 10.244.0.0/16
+          - 10.96.0.0/12
+        project: "{{ gcp_project }}"
+        auth_kind: serviceaccount
+        service_account_file: "{{ gcp_cred_file }}"
+        state: present
+
+    - name: Generar par de llaves SSH
+      openssh_keypair:
+        path: ./ssh-key
+        type: rsa
+        size: 4096
+        force: no
+
+    - name: Leer llave pública SSH
+      slurp:
+        src: ./ssh-key.pub
+      register: ssh_pub_key
+
+    - name: Crear instancia master
+      google.cloud.gcp_compute_instance:
+        name: k8s-master
+        machine_type: "{{ machine_type }}"
+        zone: "{{ gcp_zone }}"
+        project: "{{ gcp_project }}"
+        auth_kind: serviceaccount
+        service_account_file: "{{ gcp_cred_file }}"
+        disks:
+          - auto_delete: yes
+            boot: yes
+            initialize_params:
+              disk_size_gb: "{{ disk_size }}"
+              source_image: "projects/{{ image_project }}/global/images/family/{{ image_family }}"
+        network_interfaces:
+          - network:
+              name: "{{ network }}"
+            subnetwork:
+              name: "{{ gcp_subnet }}"
+              region: "{{ gcp_region }}"
+            access_configs:
+              - name: External NAT
+                type: ONE_TO_ONE_NAT
+        metadata:
+          ssh-keys: "ansible:{{ ssh_pub_key.content | b64decode }}"
+        state: present
+      register: master_instance
+
+    - name: Crear instancia worker 1
+      google.cloud.gcp_compute_instance:
+        name: k8s-worker-1
+        machine_type: "{{ machine_type }}"
+        zone: "{{ gcp_zone }}"
+        project: "{{ gcp_project }}"
+        auth_kind: serviceaccount
+        service_account_file: "{{ gcp_cred_file }}"
+        disks:
+          - auto_delete: yes
+            boot: yes
+            initialize_params:
+              disk_size_gb: "{{ disk_size }}"
+              source_image: "projects/{{ image_project }}/global/images/family/{{ image_family }}"
+        network_interfaces:
+          - network:
+              name: "{{ network }}"
+            subnetwork:
+              name: "{{ gcp_subnet }}"
+              region: "{{ gcp_region }}"
+            access_configs:
+              - name: External NAT
+                type: ONE_TO_ONE_NAT
+        metadata:
+          ssh-keys: "ansible:{{ ssh_pub_key.content | b64decode }}"
+        state: present
+      register: worker1_instance
+
+    - name: Crear instancia worker 2
+      google.cloud.gcp_compute_instance:
+        name: k8s-worker-2
+        machine_type: "{{ machine_type }}"
+        zone: "{{ gcp_zone }}"
+        project: "{{ gcp_project }}"
+        auth_kind: serviceaccount
+        service_account_file: "{{ gcp_cred_file }}"
+        disks:
+          - auto_delete: yes
+            boot: yes
+            initialize_params:
+              disk_size_gb: "{{ disk_size }}"
+              source_image: "projects/{{ image_project }}/global/images/family/{{ image_family }}"
+        network_interfaces:
+          - network:
+              name: "{{ network }}"
+            subnetwork:
+              name: "{{ gcp_subnet }}"
+              region: "{{ gcp_region }}"
+            access_configs:
+              - name: External NAT
+                type: ONE_TO_ONE_NAT
+        metadata:
+          ssh-keys: "ansible:{{ ssh_pub_key.content | b64decode }}"
+        state: present
+      register: worker2_instance
+
+    - name: Guardar IPs de las instancias
+      set_fact:
+        master_ip: "{{ master_instance.networkInterfaces[0].accessConfigs[0].natIP }}"
+        worker1_ip: "{{ worker1_instance.networkInterfaces[0].accessConfigs[0].natIP }}"
+        worker2_ip: "{{ worker2_instance.networkInterfaces[0].accessConfigs[0].natIP }}"
+
+    - name: Mostrar IPs asignadas
+      debug:
+        msg:
+          - "Master IP: {{ master_ip }}"
+          - "Worker 1 IP: {{ worker1_ip }}"
+          - "Worker 2 IP: {{ worker2_ip }}"
+
+    - name: Esperar a que las instancias estén disponibles
+      wait_for:
+        host: "{{ item }}"
+        port: 22
+        delay: 10
+        timeout: 300
+      loop:
+        - "{{ master_ip }}"
+        - "{{ worker1_ip }}"
+        - "{{ worker2_ip }}"
+
+    - name: Reservar IP pública estática
+      google.cloud.gcp_compute_address:
+        name: "k8s-master-public-ip"
+        region: "{{ gcp_region }}"
+        project: "{{ gcp_project }}"
+        auth_kind: serviceaccount
+        service_account_file: "{{ gcp_cred_file }}"
+        state: present
+      register: static_ip
+
+    - name: Guardar IP pública
+      set_fact:
+        k8s_master_public_ip: "{{ static_ip.address }}"
+
+    - name: Crear regla de firewall para Kubernetes API
+      google.cloud.gcp_compute_firewall:
+        name: "allow-k8s-api"
+        network: "{{ network }}"
+        project: "{{ gcp_project }}"
+        auth_kind: serviceaccount
+        service_account_file: "{{ gcp_cred_file }}"
+        direction: INGRESS
+        priority: 1000
+        allowed:
+          - ip_protocol: tcp
+            ports:
+              - "6443"
+        source_ranges:
+          - "0.0.0.0/0" # O restringe a tu IP: 'tu-ip-publica/32'
+        target_tags:
+          - "k8s-master"
+
+- name: Configurar todos los nodos
+  hosts: k8s_cluster
+  become: yes
+  vars_files:
+    - group_vars/all.yml
+
+  tasks:
+    - name: Actualizar cache de apt
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Instalar dependencias
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+          - software-properties-common
+        state: present
+
+    - name: Deshabilitar swap
+      shell: swapoff -a
+
+    - name: Remover swap del fstab
+      lineinfile:
+        path: /etc/fstab
+        regexp: '\sswap\s'
+        state: absent
+
+    - name: Cargar módulos del kernel
+      copy:
+        dest: /etc/modules-load.d/k8s.conf
+        content: |
+          overlay
+          br_netfilter
+
+    - name: Aplicar módulos
+      modprobe:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - overlay
+        - br_netfilter
+
+    - name: Configurar parámetros de sysctl
+      copy:
+        dest: /etc/sysctl.d/k8s.conf
+        content: |
+          net.bridge.bridge-nf-call-iptables  = 1
+          net.bridge.bridge-nf-call-ip6tables = 1
+          net.ipv4.ip_forward                 = 1
+
+    - name: Aplicar parámetros de sysctl
+      command: sysctl --system
+
+    - name: Añadir clave GPG de Docker
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+
+    - name: Añadir repositorio de Docker
+      apt_repository:
+        repo: "deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+        state: present
+
+    - name: Instalar containerd
+      apt:
+        name: containerd.io
+        state: present
+        update_cache: yes
+
+    - name: Crear directorio de configuración de containerd
+      file:
+        path: /etc/containerd
+        state: directory
+
+    - name: Generar configuración por defecto de containerd
+      shell: containerd config default > /etc/containerd/config.toml
+
+    - name: Configurar systemd cgroup driver
+      replace:
+        path: /etc/containerd/config.toml
+        regexp: "SystemdCgroup = false"
+        replace: "SystemdCgroup = true"
+
+    - name: Reiniciar containerd
+      systemd:
+        name: containerd
+        state: restarted
+        enabled: yes
+        daemon_reload: yes
+
+    - name: Añadir clave GPG de Kubernetes
+      apt_key:
+        url: https://pkgs.k8s.io/core:/stable:/v{{ k8s_version }}/deb/Release.key
+        state: present
+
+    - name: Añadir repositorio de Kubernetes
+      apt_repository:
+        repo: "deb https://pkgs.k8s.io/core:/stable:/v{{ k8s_version }}/deb/ /"
+        state: present
+        filename: kubernetes
+
+    - name: Instalar componentes de Kubernetes
+      apt:
+        name:
+          - kubelet
+          - kubeadm
+          - kubectl
+        state: present
+        update_cache: yes
+
+    - name: Mantener versiones de Kubernetes
+      dpkg_selections:
+        name: "{{ item }}"
+        selection: hold
+      loop:
+        - kubelet
+        - kubeadm
+        - kubectl
+
+- name: Inicializar control plane
+  hosts: control_plane
+  become: yes
+  vars_files:
+    - group_vars/all.yml
+
+  tasks:
+    - name: Inicializar cluster con kubeadm
+      command: >
+        kubeadm init
+        --pod-network-cidr={{ pod_network_cidr }}
+        --service-cidr={{ service_cidr }}
+        --apiserver-advertise-address={{ ansible_default_ipv4.address }}
+      args:
+        creates: /etc/kubernetes/admin.conf
+
+    - name: Crear directorio .kube
+      file:
+        path: /home/{{ ansible_user }}/.kube
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0755"
+
+    - name: Copiar admin.conf a usuario
+      copy:
+        src: /etc/kubernetes/admin.conf
+        dest: /home/{{ ansible_user }}/.kube/config
+        remote_src: yes
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0600"
+
+    - name: Descargar admin.conf localmente
+      fetch:
+        src: /etc/kubernetes/admin.conf
+        dest: ./kubeconfig
+        flat: yes
+
+    - name: Instalar CNI (Flannel)
+      become: no
+      command: kubectl apply -f {{ cni_url }}
+      environment:
+        KUBECONFIG: /home/{{ ansible_user }}/.kube/config
+
+    - name: Generar comando de join
+      command: kubeadm token create --print-join-command
+      register: join_command
+
+    - name: Guardar comando de join
+      set_fact:
+        k8s_join_command: "{{ join_command.stdout }}"
+
+    - name: Mostrar comando de join
+      debug:
+        var: k8s_join_command
+
+- name: Unir workers al cluster
+  hosts: workers
+  become: yes
+
+  tasks:
+    - name: Unir nodo al cluster
+      command: "{{ hostvars[groups['control_plane'][0]]['k8s_join_command'] }}"
+      args:
+        creates: /etc/kubernetes/kubelet.conf
+
+- name: Verificar cluster
+  hosts: control_plane
+  become: no
+
+  tasks:
+    - name: Esperar a que todos los nodos estén Ready
+      command: kubectl get nodes
+      register: nodes_status
+      until: nodes_status.stdout.find("NotReady") == -1
+      retries: 20
+      delay: 15
+      environment:
+        KUBECONFIG: /home/{{ ansible_user }}/.kube/config
+
+    - name: Mostrar estado de los nodos
+      command: kubectl get nodes -o wide
+      register: final_nodes
+      environment:
+        KUBECONFIG: /home/{{ ansible_user }}/.kube/config
+
+    - name: Resultado final
+      debug:
+        var: final_nodes.stdout_lines
