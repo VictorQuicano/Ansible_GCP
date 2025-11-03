@@ -1,0 +1,330 @@
+---
+- name: Deploy Python FastAPI App with Autoscaling and Load Balancer
+  hosts: localhost
+  connection: local
+  gather_facts: true
+
+  vars:
+    # Configuración del proyecto GCP
+    gcp_project: "secret-epsilon-474011-m4"
+    gcp_cred_file: "gcp_credential.json"
+    gcp_region: "southamerica-west1"
+    gcp_zone: "southamerica-west1-a"
+
+    # Configuración de la aplicación
+    app_name: "fastapi-app"
+    app_port: 8000
+    network_name: "default"
+    firewall_rule: "allow-fastapi-app"
+
+    # Configuración de instancias
+    machine_type: "e2-medium"
+    image_project: "ubuntu-os-cloud"
+    image_family: "ubuntu-2204-lts"
+
+    # Configuración de autoscaling
+    min_instances: 1
+    max_instances: 5
+    target_cpu_utilization: 0.5 # 50% de CPU
+    cooldown_period: 60
+
+  tasks:
+    - name: Create firewall rule for application
+      google.cloud.gcp_compute_firewall:
+        name: "{{ firewall_rule }}"
+        allowed:
+          - ip_protocol: tcp
+            ports:
+              - "{{ app_port }}"
+        source_ranges:
+          - "0.0.0.0/0"
+        target_tags:
+          - "{{ app_name }}"
+        project: "{{ gcp_project }}"
+        auth_kind: serviceaccount
+        service_account_file: "{{ gcp_cred_file }}"
+        state: present
+
+    - name: Create HTTP health check
+      google.cloud.gcp_compute_health_check:
+        name: "{{ app_name }}-health-check"
+        type: HTTP
+        http_health_check:
+          port: "{{ app_port }}"
+          request_path: "/"
+        check_interval_sec: 10
+        timeout_sec: 5
+        unhealthy_threshold: 3
+        healthy_threshold: 2
+        project: "{{ gcp_project }}"
+        auth_kind: serviceaccount
+        service_account_file: "{{ gcp_cred_file }}"
+        state: present
+      register: health_check
+
+    - name: Create instance template
+      google.cloud.gcp_compute_instance_template:
+        name: "{{ app_name }}-template-{{ ansible_date_time.epoch }}"
+        project: "{{ gcp_project }}"
+        auth_kind: serviceaccount
+        service_account_file: "{{ gcp_cred_file }}"
+        properties:
+          machine_type: "{{ machine_type }}"
+          disks:
+            - auto_delete: true
+              boot: true
+              initialize_params:
+                source_image: "projects/{{ image_project }}/global/images/family/{{ image_family }}"
+                disk_size_gb: 10
+          network_interfaces:
+            - network:
+                selfLink: "global/networks/{{ network_name }}"
+              access_configs:
+                - name: External NAT
+                  type: ONE_TO_ONE_NAT
+          tags:
+            items:
+              - "{{ app_name }}"
+          service_accounts:
+            - email: default
+              scopes:
+                - "https://www.googleapis.com/auth/cloud-platform"
+          metadata:
+            startup-script: |
+              #!/bin/bash
+              set -e
+
+              # Actualizar sistema
+              apt-get update
+              apt-get install -y python3 python3-pip python3-venv
+
+              # Crear directorio de aplicación
+              mkdir -p /opt/fastapi-app
+              cd /opt/fastapi-app
+
+              # Crear entorno virtual
+              python3 -m venv venv
+              source venv/bin/activate
+
+              # Instalar dependencias
+              pip install --upgrade pip
+              pip install fastapi==0.118.3 uvicorn==0.37.0
+
+              # Crear aplicación FastAPI
+              cat > /opt/fastapi-app/app.py << 'EOFAPP'
+              from fastapi import FastAPI
+              import time
+              import math
+
+              app = FastAPI(title="Algoritmo Pesado API", version="1.0.0")
+
+              def algoritmo_pesado_moderado(n: int = 1000000):
+                  start_time = time.time()
+                  
+                  # Cálculo de números primos
+                  primes = []
+                  for num in range(2, min(n, 10000)):
+                      is_prime = True
+                      for i in range(2, int(math.sqrt(num)) + 1):
+                          if num % i == 0:
+                              is_prime = False
+                              break
+                      if is_prime:
+                          primes.append(num)
+                  
+                  # Operaciones matemáticas intensivas
+                  results = []
+                  for i in range(min(len(primes), 1000)):
+                      sum_val = 0
+                      for j in range(1000):
+                          sum_val += math.sin(primes[i] * j) * math.cos(primes[i] * j)
+                      results.append(sum_val)
+                  
+                  results.sort(reverse=True)
+                  
+                  end_time = time.time()
+                  execution_time = end_time - start_time
+                  
+                  return {
+                      "primos_encontrados": len(primes),
+                      "operaciones_realizadas": len(results),
+                      "tiempo_ejecucion": round(execution_time, 4),
+                      "resultado_maximo": round(max(results), 6) if results else 0,
+                      "resultado_minimo": round(min(results), 6) if results else 0
+                  }
+
+              @app.get("/")
+              async def root():
+                  return {
+                      "message": "API de algoritmo pesado funcionando",
+                      "endpoints": ["/", "/algoritmo", "/health"]
+                  }
+
+              @app.get("/health")
+              async def health():
+                  return {"status": "healthy"}
+
+              @app.get("/algoritmo")
+              async def ejecutar_algoritmo(n: int = 1000000):
+                  try:
+                      if n > 5000000:
+                          return {"error": "El valor de n no puede ser mayor a 5,000,000"}
+                      
+                      resultado = algoritmo_pesado_moderado(n)
+                      
+                      return {
+                          "status": "completado",
+                          "parametros": {"n": n},
+                          "resultados": resultado
+                      }
+                  except Exception as e:
+                      return {"error": f"Error ejecutando el algoritmo: {str(e)}"}
+              EOFAPP
+
+              # Crear servicio systemd
+              cat > /etc/systemd/system/fastapi-app.service << 'EOFSVC'
+              [Unit]
+              Description=FastAPI Application
+              After=network.target
+
+              [Service]
+              Type=simple
+              User=root
+              WorkingDirectory=/opt/fastapi-app
+              Environment="PATH=/opt/fastapi-app/venv/bin"
+              ExecStart=/opt/fastapi-app/venv/bin/uvicorn app:app --host 0.0.0.0 --port 8000
+              Restart=always
+
+              [Install]
+              WantedBy=multi-user.target
+              EOFSVC
+
+              # Iniciar servicio
+              systemctl daemon-reload
+              systemctl enable fastapi-app
+              systemctl start fastapi-app
+        state: present
+      register: instance_template
+
+    - name: Create managed instance group
+      google.cloud.gcp_compute_instance_group_manager:
+        name: "{{ app_name }}-mig"
+        base_instance_name: "{{ app_name }}-instance"
+        instance_template:
+          selfLink: "{{ instance_template.selfLink }}"
+        target_size: "{{ min_instances }}"
+        zone: "{{ gcp_zone }}"
+        named_ports:
+          - name: http
+            port: "{{ app_port }}"
+        project: "{{ gcp_project }}"
+        auth_kind: serviceaccount
+        service_account_file: "{{ gcp_cred_file }}"
+        state: present
+      register: instance_group
+
+    - name: Create autoscaler
+      google.cloud.gcp_compute_autoscaler:
+        name: "{{ app_name }}-autoscaler"
+        zone: "{{ gcp_zone }}"
+        target: "{{ instance_group }}"
+        autoscaling_policy:
+          min_num_replicas: "{{ min_instances }}"
+          max_num_replicas: "{{ max_instances }}"
+          cool_down_period_sec: "{{ cooldown_period }}"
+          cpu_utilization:
+            utilization_target: "{{ target_cpu_utilization }}"
+        project: "{{ gcp_project }}"
+        auth_kind: serviceaccount
+        service_account_file: "{{ gcp_cred_file }}"
+        state: present
+
+    - name: Debug instance_group manager output
+      debug:
+        var: instance_group
+
+    - name: Set backend group URL from MIG output
+      set_fact:
+        backend_group_url: "{{ instance_group['instanceGroup'] }}"
+
+    - name: Debug backend_group_url
+      debug:
+        var: backend_group_url
+
+    - name: Create backend service
+      google.cloud.gcp_compute_backend_service:
+        name: "{{ app_name }}-backend"
+        backends:
+          - group: "{{ backend_group_url }}"
+            balancing_mode: UTILIZATION
+            max_utilization: 0.8
+            capacity_scaler: 1.0
+        health_checks:
+          - "{{ health_check.selfLink }}"
+        port_name: http
+        protocol: HTTP
+        timeout_sec: 30
+        project: "{{ gcp_project }}"
+        auth_kind: serviceaccount
+        service_account_file: "{{ gcp_cred_file }}"
+        state: present
+      register: backend_service
+
+    - name: Create URL map
+      google.cloud.gcp_compute_url_map:
+        name: "{{ app_name }}-url-map"
+        default_service: "{{ backend_service }}"
+        project: "{{ gcp_project }}"
+        auth_kind: serviceaccount
+        service_account_file: "{{ gcp_cred_file }}"
+        state: present
+      register: url_map
+
+    - name: Create target HTTP proxy
+      google.cloud.gcp_compute_target_http_proxy:
+        name: "{{ app_name }}-http-proxy"
+        url_map: "{{ url_map }}"
+        project: "{{ gcp_project }}"
+        auth_kind: serviceaccount
+        service_account_file: "{{ gcp_cred_file }}"
+        state: present
+      register: http_proxy
+
+    - name: Reserve global IP address
+      google.cloud.gcp_compute_global_address:
+        name: "{{ app_name }}-lb-ip"
+        project: "{{ gcp_project }}"
+        auth_kind: serviceaccount
+        service_account_file: "{{ gcp_cred_file }}"
+        state: present
+      register: lb_ip
+
+    - name: Create global forwarding rule
+      google.cloud.gcp_compute_global_forwarding_rule:
+        name: "{{ app_name }}-forwarding-rule"
+        target: "{{ http_proxy.selfLink }}"
+        port_range: "80"
+        ip_protocol: TCP
+        ip_address: "{{ lb_ip.address }}"
+        project: "{{ gcp_project }}"
+        auth_kind: serviceaccount
+        service_account_file: "{{ gcp_cred_file }}"
+        state: present
+
+    - name: Display deployment information
+      debug:
+        msg:
+          - "=========================================="
+          - "Deployment completado exitosamente!"
+          - "=========================================="
+          - "Load Balancer IP: {{ lb_ip.address }}"
+          - "Endpoints disponibles:"
+          - "  - http://{{ lb_ip.address }}/"
+          - "  - http://{{ lb_ip.address }}/health"
+          - "  - http://{{ lb_ip.address }}/algoritmo?n=1000000"
+          - "=========================================="
+          - "Configuración de autoscaling:"
+          - "  - Instancias mínimas: {{ min_instances }}"
+          - "  - Instancias máximas: {{ max_instances }}"
+          - "  - CPU objetivo: {{ target_cpu_utilization * 100 }}%"
+          - "=========================================="

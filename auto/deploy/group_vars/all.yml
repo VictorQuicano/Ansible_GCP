@@ -1,0 +1,20 @@
+---
+gcp_project: "secret-epsilon-474011-m4"
+gcp_cred_file: "gcp_credential.json"
+gcp_region: "southamerica-west1"
+gcp_zone: "southamerica-west1-a"
+
+app_name: "python-web-app"
+app_port: 8000
+machine_type: "e2-small"
+image_family: "ubuntu-2204-lts"
+image_project: "ubuntu-os-cloud"
+
+min_instances: 2
+max_instances: 6
+target_cpu_utilization: 0.5
+cooldown_period: 60
+
+# Configuración de red
+network_name: "default"
+firewall_rule: "allow-http-{{ app_port }}"
