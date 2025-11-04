@@ -8,8 +8,8 @@
     # Configuración del proyecto GCP
     gcp_project: "secret-epsilon-474011-m4"
     gcp_cred_file: "gcp_credential.json"
-    gcp_region: "southamerica-west1"
-    gcp_zone: "southamerica-west1-a"
+    gcp_region: "northamerica-south1"
+    gcp_zone: "northamerica-south1-b"
 
     # Configuración de la aplicación
     app_name: "fastapi-app"
@@ -29,7 +29,7 @@
     cooldown_period: 60
 
   tasks:
-    - name: Create firewall rule for application
+    - name: Crear reglas para el firewall de la aplicación
       google.cloud.gcp_compute_firewall:
         name: "{{ firewall_rule }}"
         allowed:
